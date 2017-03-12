@@ -32,6 +32,7 @@ class Recognition(object):
         self.captcha_size = captcha_size
         self.width = width
         self.height = height
+        self.test_pos=0
         self.captcha_len = len(text_set)
         self.X = tf.placeholder(tf.float32, [None, self.width*self.height])
         self.Y = tf.placeholder(tf.float32, [None, self.captcha_size*self.captcha_len])
@@ -145,6 +146,22 @@ class Recognition(object):
             batch_y[i, :] = self.text2vec(text)
         return batch_x, batch_y
 
+    def get_next_test_batch(self, batch_size=100):
+        batch_x = np.zeros([batch_size, self.width*self.height])
+        batch_y = np.zeros([batch_size, self.captcha_len * self.captcha_size])
+        for i in range(batch_size):
+            if self.test_pos >= len(self.test):
+                self.test_pos = 0
+            img_x, img_y = self.test[self.test_pos]
+            img_data = base64.b64decode(img_x)
+            img_x = Image.open(BytesIO(img_data))
+            img_x = img_x.resize((self.width, self.height), Image.ANTIALIAS)
+            img_x = np.array(img_x)
+            image = convert2gray(img_x)
+            batch_x[i, :] = image.flatten() / 255
+            batch_y[i, :] = self.text2vec(img_y)
+        return batch_x, batch_y
+
     def show_a_random_picture(self):
         text, image = self.gen_captcha_text_and_image()
         f = plt.figure()
@@ -169,6 +186,21 @@ class Recognition(object):
                     result.append((img_x, img_y['result']))
         self.result = result
 
+    def read_test_data(self):
+        file = open("test.log", encoding='utf-8')
+        content = file.read()
+        content = content.replace("\n","")
+        imgs = re.findall(r'content.*?\}', content)
+        result = []
+        for img in imgs:
+            img_x = re.findall(r'content:.*?result:', img)
+            img_y = re.findall(r'result:.*?\}', img)
+            img_x = img_x[0].replace("content:", "").replace("result:", "")
+            img_y = json.loads(img_y[0].replace("result:", ""))
+            if 'result' in img_y:
+                if len(img_y['result']) == 4:
+                    result.append((img_x, img_y['result']))
+        self.test = result
 
     def train(self):
         loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(labels=self.Y, logits=self.out))
@@ -184,19 +216,22 @@ class Recognition(object):
             sess.run(tf.global_variables_initializer())
             step = 0
             while True:
-                batch_x, batch_y = self.get_next_batch(64)
+                batch_x, batch_y = self.get_next_batch(100)
                 _, loss_ = sess.run([optimizer, loss], feed_dict={self.X: batch_x, self.Y: batch_y, self.keep_prob: 0.75})
                 print(step, loss_)
                 if step % 10 == 0:
-                    batch_x_test, batch_y_test = self.get_next_batch(100)
+                    batch_x_test, batch_y_test = self.get_next_test_batch(100)
                     acc = sess.run(accuracy, feed_dict={self.X: batch_x_test, self.Y: batch_y_test, self.keep_prob: 1.0})
-                    if acc > 0.9:
+                    print('acc :'+str(acc))
+                    if step != 0 and step % 500 == 0:
                         saver.save(sess, "model.model")
                         print("save")
                 step += 1
+            saver.save(sess, "model.model")
 
 
 if __name__ == '__main__':
     r = Recognition()
     r.read_img_from_log()
+    r.read_test_data()
     r.train()
